@@ -266,6 +266,8 @@ function redraw(feature) {
         bar.style.width = percentage + '%';
         if (d.range) bar.style.backgroundColor = prop === 'UNKNOWN' ?
             '#666' : range[index];
+        else bar.style.backgroundColor = '#'+Math.floor(Math.random()*16777215).toString(16);
+
         var tooltip = prop + ' (' + percentage + '%)';
         bar.setAttribute('data-tooltip', tooltip.toLowerCase());
         barContainer.appendChild(bar);
