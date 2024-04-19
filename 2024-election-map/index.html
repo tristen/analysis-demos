@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset='utf-8' />
+    <title>Mapbox Election Storytelling</title>
+    <meta name='viewport' content='initial-scale=1,maximum-scale=1,user-scalable=no' />
+    <link rel="icon" type="image/x-icon"
+        href="https://raw.githubusercontent.com/mapbox/assembly/publisher-staging/src/svgs/mapbox.svg">
+    <script src='https://api.tiles.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js'></script>
+    <link href='https://api.tiles.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css' rel='stylesheet' />
+
+    <!-- Load the `mapbox-gl-geocoder` plugin. -->
+    <script
+        src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.0.0/mapbox-gl-geocoder.min.js"></script>
+    <link rel="stylesheet"
+        href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-geocoder/v5.0.0/mapbox-gl-geocoder.css"
+        type="text/css">
+
+
+    <script src="https://unpkg.com/intersection-observer@0.12.0/intersection-observer.js"></script>
+    <script src="https://unpkg.com/scrollama"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Used for dynamic parsing of Google Sheet CSV -->
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.3.2/papaparse.min.js"></script>
+
+    <style>
+        #map-inset {
+            opacity: 0.8;
+            transition: opacity 0.5s ease-in-out;
+            pointer-events: none;
+        }
+
+        #map-inset:hover {
+            opacity: 1
+        }
+
+        #map-inset .mapboxgl-ctrl-bottom-left {
+            display: none;
+        }
+
+        #header {
+            z-index: 5;
+        }
+
+        #footer {
+            width: 100%;
+            padding-top: 2vh;
+            padding-bottom: 2vh;
+            text-align: center;
+            line-height: 25px;
+            font-size: 13px;
+            position: relative;
+            z-index: 5;
+        }
+
+        #features {
+            padding-top: 10vh;
+            padding-bottom: 10vh;
+        }
+
+        .hidden {
+            visibility: hidden;
+        }
+
+        .centered {
+            width: 50vw;
+            margin: 0 auto;
+        }
+
+        .lefty {
+            width: 33vw;
+        }
+
+        .righty {
+            width: 33vw;
+            margin-left: 62vw;
+        }
+
+        .fully {
+            width: 100%;
+            margin: auto;
+        }
+
+        .light {
+            color: #444;
+            background-color: #fafafa;
+        }
+
+        .dark {
+            color: #fafafa;
+            background-color: #2c2c2cd3;
+        }
+
+        .step {
+            padding-bottom: 50vh;
+            opacity: 0.25;
+        }
+
+        .step.active {
+            opacity: 0.9;
+        }
+
+        .step img {
+            width: 100%;
+        }
+
+        /* Fix issue on mobile browser where scroll breaks  */
+        .mapboxgl-canvas-container.mapboxgl-touch-zoom-rotate.mapboxgl-touch-drag-pan,
+        .mapboxgl-canvas-container.mapboxgl-touch-zoom-rotate.mapboxgl-touch-drag-pan .mapboxgl-canvas {
+            touch-action: unset;
+        }
+
+        .mapboxgl-canvas-container {
+            pointer-events: all;
+        }
+    </style>
+</head>
+
+<body class="h-screen font-sans bg-gradient-to-br from-slate-500 to-slate-900 bg-fixed">
+    <div id="map-inset" class="fixed bottom-20 right-8 h-45 w-45 max-w-full z-10"></div>
+
+    <div id="map" class="fixed h-full top-0 w-full"></div>
+    <div id="story" class="flex flex-col flex-row h-1/2 top-0 lg:h-full lg:top-0"></div>
+    <div class="fixed inset-x-0 bottom-0 mb-8 sm:right-0 sm:left-auto p-4 shadow-lg z-10">
+        <div id="legend" class="mb-2 bg-slate-800 text-white p-4 rounded-lg shadow-lg">
+            <h3 class="text-md font-bold mb-2">Popular vote by county</h3>
+            <div class="flex flex-col items-start space-y-1">
+                <div class="flex items-center">
+                    <div class="w-3 h-3 rounded-full bg-red-500 mr-1"></div>
+                    <span class="text-xs">80%+ Republican</span>
+                </div>
+                <div class="flex items-center">
+                    <div class="w-3 h-3 rounded-full bg-red-300 mr-1"></div>
+                    <span class="text-xs">60% Republican</span>
+                </div>
+                <div class="flex items-center">
+                    <div class="w-3 h-3 rounded-full bg-gray-300 mr-1"></div>
+                    <span class="text-xs">50%-50%</span>
+                </div>
+                <div class="flex items-center">
+                    <div class="w-3 h-3 rounded-full bg-blue-300 mr-1"></div>
+                    <span class="text-xs">60% Democrat</span>
+                </div>
+                <div class="flex items-center">
+                    <div class="w-3 h-3 rounded-full bg-blue-500 mr-1"></div>
+                    <span class="text-xs">80%+ Democrat</span>
+                </div>
+            </div>
+        </div>
+        <div id="map-overlay" class="text-white bg-slate-900 p-4 rounded-xl">
+        </div>
+    </div>
+    <script src="config.js"></script>
+    <script>
+        var initLoad = true;
+        var layerTypes = {
+            'fill': ['fill-opacity'],
+            'line': ['line-opacity'],
+            'circle': ['circle-opacity', 'circle-stroke-opacity'],
+            'symbol': ['icon-opacity', 'text-opacity'],
+            'raster': ['raster-opacity'],
+            'fill-extrusion': ['fill-extrusion-opacity'],
+            'heatmap': ['heatmap-opacity']
+        }
+
+        var alignments = {
+            'left': 'lefty',
+            'center': 'centered',
+            'right': 'righty',
+            'full': 'fully'
+        }
+
+        function getLayerPaintType(layer) {
+            var layerType = map.getLayer(layer).type;
+            return layerTypes[layerType];
+        }
+
+        function setLayerOpacity(layer) {
+            if (map.getLayer(layer.layer)) {
+
+                var paintProps = getLayerPaintType(layer.layer);
+                paintProps.forEach(function (prop) {
+                    var options = {};
+                    const duration = layer.duration || mapSettings.animationOption.duration;
+                    if (duration) {
+                        var transitionProp = prop + "-transition";
+                        options = { "duration": duration };
+                        map.setPaintProperty(layer.layer, transitionProp, options);
+                    }
+                    map.setPaintProperty(layer.layer, prop, layer.opacity, options);
+                });
+
+            } else {
+                console.log(`'${layer.layer}'' layer name not found in style. Check available layers:`, map.getStyle().layers)
+            }
+        }
+
+        var story = document.getElementById('story');
+        var features = document.createElement('div');
+        features.setAttribute('id', 'features');
+        features.className = "mt-[300px]"
+
+        var header = document.createElement('div');
+
+        var headerText = document.createElement('div');
+        header.appendChild(headerText)
+
+        var headerImage = document.createElement('div');
+        header.appendChild(headerImage)
+
+        header.className = "md:w-1/3 mb-8 md:mb-0 mt-5"
+        headerText.className = "p-4"
+        headerImage.className = "sm:w-1/3 p-4"
+
+        if (config.title) {
+            var titleText = document.createElement('h1');
+            titleText.classList
+            titleText.innerHTML = config.title;
+            headerText.appendChild(titleText);
+        }
+
+        if (config.subtitle) {
+            var subtitleText = document.createElement('h2');
+            subtitleText.innerHTML = config.subtitle;
+            headerText.appendChild(subtitleText);
+        }
+
+        if (config.byline) {
+            var bylineText = document.createElement('p');
+            bylineText.innerHTML = config.byline;
+            headerText.appendChild(bylineText);
+        }
+
+        if (headerText.innerText.length > 0) {
+            headerText.classList.add(config.theme);
+            header.setAttribute('id', 'header');
+            story.appendChild(header);
+        }
+
+        config.chapters.forEach((record, idx) => {
+            var container = document.createElement('div');
+            var chapter = document.createElement('div');
+
+            if (record.title) {
+                var title = document.createElement('h3');
+                title.className = 'text-xl'
+                title.innerHTML = record.title;
+                chapter.appendChild(title);
+            }
+
+            if (record.image) {
+                var image = new Image();
+                image.src = record.image;
+                chapter.appendChild(image);
+            }
+
+            if (record.description) {
+                var story = document.createElement('p');
+                story.innerHTML = record.description;
+                chapter.appendChild(story);
+            }
+
+            container.setAttribute('id', record.id);
+            container.classList.add('step');
+            if (idx === 0) {
+                container.classList.add('active');
+            }
+
+            chapter.classList.add(config.theme);
+            chapter.classList.add('p-4');
+            container.appendChild(chapter);
+            container.classList.add(alignments[record.alignment] || 'centered');
+            if (record.hidden) {
+                container.classList.add('hidden');
+            }
+            features.appendChild(container);
+        });
+
+        story.appendChild(features);
+
+        var footer = document.createElement('div');
+
+        if (config.footer) {
+            var footerText = document.createElement('p');
+            footerText.innerHTML = config.footer;
+            footer.appendChild(footerText);
+        }
+
+        if (footer.innerText.length > 0) {
+            footer.classList.add(config.theme);
+            footer.setAttribute('id', 'footer');
+            story.appendChild(footer);
+        }
+
+        mapboxgl.accessToken = config.accessToken;
+
+        const transformRequest = (url, resourceType) => {
+            const suffix = "&pluginName=scrollytellingV2.1";
+            if (resourceType === 'Source') {
+                return {
+                    url: url + suffix
+                }
+            }
+        }
+
+        var map = new mapboxgl.Map({
+            container: 'map',
+            style: config.style,
+            center: config.location.center,
+            zoom: config.location.zoom,
+            bearing: config.location.bearing,
+            pitch: config.location.pitch,
+            maxBounds: config.location.maxBounds,
+            interactive: true,
+            transformRequest: transformRequest,
+            projection: config.projection,
+            hash: true
+        });
+
+        //
+        if (config.geocoder) {
+            map.addControl(
+                new MapboxGeocoder({
+                    accessToken: mapboxgl.accessToken,
+                    mapboxgl: mapboxgl,
+                    collapsed: true
+                })
+            );
+        }
+
+        // Create a inset map if enabled in config.js
+        if (config.inset) {
+            var insetMap = new mapboxgl.Map({
+                container: 'map-inset', // container id
+                style: 'mapbox://styles/planemad/clu1lism1002r01qrdanleb5z', //hosted style id
+                center: config.chapters[0].location.center,
+                // Hardcode above center value if you want insetMap to be static.
+                zoom: .1, // starting zoom
+                maxZoom: 2.5,
+                hash: false,
+                interactive: false,
+                attributionControl: false,
+                projection: 'globe'
+            });
+        }
+
+        if (config.showMarkers) {
+            var marker = new mapboxgl.Marker({ color: config.markerColor });
+            marker.setLngLat(config.chapters[0].location.center).addTo(map);
+        }
+
+        // instantiate the scrollama
+        var scroller = scrollama();
+
+
+        map.on("style.load", function () {
+            // Callback function once map is loaded
+            if (config.callback) {
+                config.callback();
+            }
+        })
+        map.on("load", function () {
+            if (config.use3dTerrain) {
+                map.addSource('mapbox-dem', {
+                    'type': 'raster-dem',
+                    'url': 'mapbox://mapbox.mapbox-terrain-dem-v1',
+                    'tileSize': 512,
+                    'maxzoom': 14
+                });
+                // add the DEM source as a terrain layer with exaggerated height
+                map.setTerrain({ 'source': 'mapbox-dem', 'exaggeration': 1.5 });
+
+                // add a sky layer that will show when the map is highly pitched
+                map.addLayer({
+                    'id': 'sky',
+                    'type': 'sky',
+                    'paint': {
+                        'sky-type': 'atmosphere',
+                        'sky-atmosphere-sun': [0.0, 0.0],
+                        'sky-atmosphere-sun-intensity': 15
+                    }
+                });
+            };
+
+            // As the map moves, grab and update bounds in inset map.
+            if (config.inset) {
+                map.on('move', getInsetBounds);
+            }
+            // setup the instance, pass callback functions
+            scroller
+                .setup({
+                    step: '.step',
+                    offset: 0.5,
+                    progress: true
+                })
+                .onStepEnter(async response => {
+                    var current_chapter = config.chapters.findIndex(chap => chap.id === response.element.id);
+                    var chapter = config.chapters[current_chapter];
+                    response.element.classList.add('active');
+                    map[chapter.mapAnimation || 'flyTo'](
+                        {
+                            ...chapter.location,
+                            ...mapSettings.animationOption
+                        });
+
+                    // Incase you do not want to have a dynamic inset map,
+                    // rather want to keep it a static view but still change the
+                    // bbox as main map move: comment out the below if section.
+                    if (config.inset) {
+                        if (chapter.location.zoom < 5) {
+                            insetMap.flyTo({ center: chapter.location.center, zoom: 0 });
+                        }
+                        else {
+                            insetMap.flyTo({ center: chapter.location.center, zoom: 3 });
+                        }
+                    }
+                    if (config.showMarkers) {
+                        marker.setLngLat(chapter.location.center);
+                    }
+                    if (chapter.onChapterEnter.length > 0) {
+                        chapter.onChapterEnter.forEach(setLayerOpacity);
+                    }
+                    if (chapter.callback) {
+                        chapter.callback();
+                    }
+                    if (chapter.rotateAnimation) {
+                        map.once('moveend', () => {
+                            const rotateNumber = map.getBearing();
+                            map.rotateTo(rotateNumber + 180, {
+                                duration: 30000, easing: function (t) {
+                                    return t;
+                                }
+                            });
+                        });
+                    }
+                    if (config.auto) {
+                        var next_chapter = (current_chapter + 1) % config.chapters.length;
+                        map.once('moveend', () => {
+                            document.querySelectorAll('[data-scrollama-index="' + next_chapter.toString() + '"]')[0].scrollIntoView();
+                        });
+                    }
+                })
+                .onStepExit(response => {
+                    var chapter = config.chapters.find(chap => chap.id === response.element.id);
+                    response.element.classList.remove('active');
+                    if (chapter.onChapterExit.length > 0) {
+                        chapter.onChapterExit.forEach(setLayerOpacity);
+                    }
+                });
+
+
+            if (config.auto) {
+                document.querySelectorAll('[data-scrollama-index="0"]')[0].scrollIntoView();
+            }
+        });
+
+        //Helper functions for insetmap
+        function getInsetBounds() {
+            let bounds = map.getBounds();
+
+            let boundsJson = {
+                "type": "FeatureCollection",
+                "features": [{
+                    "type": "Feature",
+                    "properties": {},
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [
+                            [
+                                [
+                                    bounds._sw.lng,
+                                    bounds._sw.lat
+                                ],
+                                [
+                                    bounds._ne.lng,
+                                    bounds._sw.lat
+                                ],
+                                [
+                                    bounds._ne.lng,
+                                    bounds._ne.lat
+                                ],
+                                [
+                                    bounds._sw.lng,
+                                    bounds._ne.lat
+                                ],
+                                [
+                                    bounds._sw.lng,
+                                    bounds._sw.lat
+                                ]
+                            ]
+                        ]
+                    }
+                }]
+            }
+
+            if (initLoad) {
+                addInsetLayer(boundsJson);
+                initLoad = false;
+            } else {
+                updateInsetLayer(boundsJson);
+            }
+
+        }
+
+        function addInsetLayer(bounds) {
+            insetMap.addSource('boundsSource', {
+                'type': 'geojson',
+                'data': bounds
+            });
+
+            insetMap.addLayer({
+                'id': 'boundsLayer',
+                'type': 'fill',
+                'source': 'boundsSource', // reference the data source
+                'layout': {},
+                'paint': {
+                    'fill-color': 'white', // blue color fill
+                    'fill-opacity': 0.2
+                }
+            });
+            // // Add a black outline around the polygon.
+            insetMap.addLayer({
+                'id': 'outlineLayer',
+                'type': 'line',
+                'source': 'boundsSource',
+                'layout': {},
+                'paint': {
+                    'line-color': 'orange',
+                    'line-width': 2
+                }
+            });
+        }
+
+        function updateInsetLayer(bounds) {
+            insetMap.getSource('boundsSource').setData(bounds);
+        }
+
+        // setup resize event
+        window.addEventListener('resize', scroller.resize);
+
+    </script>
+
+</body>
+
+</html>
